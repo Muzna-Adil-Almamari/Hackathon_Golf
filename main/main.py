@@ -15,15 +15,14 @@ from datetime import datetime, timezone
 # =============================
 # Load Oman boundary polygon
 # =============================
-oman_boundary = gpd.read_file(
-    r"C:\Users\bbuser\Downloads\geoBoundaries-OMN-ADM1.geojson"
-)
+oman_boundary = gpd.read_file(r"geoBoundaries-OMN-ADM1.geojson")
+
 oman_boundary = oman_boundary.to_crs(epsg=4326)
 
 # =============================
 # Config
 # =============================
-st.set_page_config(page_title="5G Tower Planner -- Region-aware (Greedy + PDF)", layout="wide")
+st.set_page_config(page_title="5G Tower Planner", layout="wide")
 
 OMAN_POP_FILE_CSV = "omn_pd_2007_1km_ASCII_XYZ.csv"
 MIN_LAT, MAX_LAT = 16.6, 26.4
