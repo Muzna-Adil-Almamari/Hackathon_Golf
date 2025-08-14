@@ -1,0 +1,7 @@
+streamlit
+folium
+pandas
+shapely
+geopandas
+streamlit-folium
+fpdf
