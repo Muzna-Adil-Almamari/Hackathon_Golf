@@ -17,12 +17,13 @@ from scipy.spatial.distance import cdist
 import networkx as nx
 import requests
 import math
+from haversine import haversine, Unit
 
 # =============================
 # Load Oman boundary polygon
 # =============================
 try:
-    oman_boundary = gpd.read_file("main/geoBoundaries-OMN-ADM2.geojson")
+    oman_boundary = gpd.read_file(".\Hackathon_Golf\main\geoBoundaries-OMN-ADM2.geojson")
 except Exception as e:
     st.error(f"Could not load Oman boundary file: {str(e)}")
     # Provide minimal fallback boundary
@@ -114,6 +115,76 @@ def determine_best_algorithm(place_name, population_df):
 # =============================
 # Helpers
 # =============================
+def fix_tower_overlap(towers, area_type, max_iterations=100):
+    """
+    Adjusts tower positions to a
+    void overlap based on given area_type radius.
+    
+    Parameters:
+        towers (list of tuples): (lat, lon)
+        area_type (str): "urban" or "rural"
+        max_iterations (int): Maximum adjustment iterations.
+    
+    Returns:
+        list of tuples: Adjusted tower positions (lat, lon)
+    """
+    # Define radius based on type
+    radius_map = {
+        "urban": 700,
+        "rural": 5000
+    }
+    r = radius_map.get(area_type.lower(), 1000)
+
+    def move_tower(lat, lon, bearing, distance_m):
+        """Returns new lat/lon moved from original by distance and bearing."""
+        R = 6371000  # Earth radius in meters
+        lat_rad = math.radians(lat)
+        lon_rad = math.radians(lon)
+        bearing_rad = math.radians(bearing)
+
+        new_lat = math.asin(math.sin(lat_rad) * math.cos(distance_m / R) +
+                            math.cos(lat_rad) * math.sin(distance_m / R) * math.cos(bearing_rad))
+        new_lon = lon_rad + math.atan2(math.sin(bearing_rad) * math.sin(distance_m / R) * math.cos(lat_rad),
+                                       math.cos(distance_m / R) - math.sin(lat_rad) * math.sin(new_lat))
+
+        return math.degrees(new_lat), math.degrees(new_lon)
+
+    towers = list(towers)  # Copy list
+
+    for _ in range(max_iterations):
+        overlap_found = False
+
+        for i in range(len(towers)):
+            lat1, lon1 = towers[i]
+
+            for j in range(i + 1, len(towers)):
+                lat2, lon2 = towers[j]
+
+                dist = haversine_meters(lat1, lon1, lat2, lon2)
+                min_dist = 2 * r  # since same radius for all
+
+                if dist < min_dist:  # Overlap detected
+                    overlap_found = True
+
+                    # Bearing from tower1 to tower2
+                    bearing = math.degrees(math.atan2(
+                        math.sin(math.radians(lon2 - lon1)) * math.cos(math.radians(lat2)),
+                        math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) -
+                        math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+                        math.cos(math.radians(lon2 - lon1))
+                    ))
+
+                    shift_amount = (min_dist - dist) / 2 + 1  # Add 1m buffer
+
+                    # Move both towers in opposite directions
+                    towers[i] = move_tower(lat1, lon1, bearing + 180, shift_amount)
+                    towers[j] = move_tower(lat2, lon2, bearing, shift_amount)
+
+        if not overlap_found:
+            break
+
+    return towers
+
 def generate_mock_population_oman(num_points=2000):
     random.seed(42)
     data = []
@@ -246,6 +317,17 @@ def kmeans_tower_placement(pop_df, num_towers, radius_m):
 # =============================
 # ALGORITHM 3: Population Density Hotspot Detection
 # =============================
+def haversine_meters(lat1, lon1, lat2, lon2):
+    """Calculate the great-circle distance between two points in meters."""
+    R = 6371000  # Earth's radius in meters
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return R * c
+
 def hotspot_tower_placement(pop_df, num_towers, radius_m):
     if len(pop_df) == 0:
         return []
@@ -542,9 +624,7 @@ with st.sidebar:
     num_towers = st.slider("# Number Of Towers", 1, 300, 5)
 
     profile = st.selectbox("Propagation Profile", ["Urban", "Rural"])
-    pathloss_exp = 3.2 if profile == "Urban" else 2.6
-
-    cell_size_m = st.slider("Coverage (meters)", 50, 300, 100, 10)
+    cell_size_m = 700 if profile == "Urban" else 5000
 
     st.markdown("**Analysis Region (around target location)**")
     if location_method == "Bounding box":
@@ -655,14 +735,24 @@ if run_clicked and "target_location" in st.session_state:
         # Select and run the chosen algorithm
         if algorithm == "Enhanced Greedy":
             towers = greedy_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m))
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
         elif algorithm == "Population-Weighted K-Means":
             towers = kmeans_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m))
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
         elif algorithm == "Hotspot Detection":
             towers = hotspot_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m))
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
         elif algorithm == "Genetic Algorithm":
             towers = genetic_algorithm_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m), generations=ga_generations, population_size=ga_population)
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
         elif algorithm == "Simulated Annealing":
             towers = simulated_annealing_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m), max_iterations=sa_iterations)
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
         
         covered_population = population_covered(towers, base_population_df, radius_m=float(cell_size_m))
 
