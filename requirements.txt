@@ -1,5 +1,4 @@
 streamlit
-folium
 pandas
 shapely
 geopandas
@@ -11,3 +10,4 @@ scipy
 networkx
 requests
 haversine
+folium
