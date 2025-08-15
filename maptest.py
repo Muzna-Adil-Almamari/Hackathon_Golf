@@ -1,4 +1,3 @@
-
 import streamlit as st
 import folium
 from folium.plugins import HeatMap
@@ -17,12 +16,15 @@ from sklearn.cluster import KMeans
 from scipy.spatial.distance import cdist
 import networkx as nx
 import requests
+from haversine import haversine, Unit
+import math
+
 
 # =============================
 # Load Oman boundary polygon
 # =============================
 oman_boundary = gpd.read_file(
-    r"C:\Users\bbuser\Desktop\mapproject\Hackathon_Golf\main\geoBoundaries-OMN-ADM1.geojson" 
+    r"C:\Users\admin\Desktop\Hack2\Hackathon_Golf\main\geoBoundaries-OMN-ADM1.geojson"
 )
 oman_boundary = oman_boundary.to_crs(epsg=4326)
 
@@ -31,7 +33,7 @@ oman_boundary = oman_boundary.to_crs(epsg=4326)
 # =============================
 st.set_page_config(page_title="5G Tower Planner -- Advanced Algorithms", layout="wide")
 
-OMAN_POP_FILE_CSV = "locatin.csv"
+OMAN_POP_FILE_CSV = "location.csv"
 MIN_LAT, MAX_LAT = 16.6, 26.4
 MIN_LON, MAX_LON = 51.9, 59.9
 
@@ -59,12 +61,125 @@ def get_coordinates_from_place(place_name):
         return None, None, False, f"Error occurred: {str(e)}"
 
 def determine_best_algorithm(place_name, population_df):
-    """Always use Hotspot Detection algorithm for optimal population coverage"""
-    return "Hotspot Detection", "Using Enhanced Hotspot Detection algorithm - guarantees placement of exact number of requested towers while prioritizing highest population density areas"
+    """Automatically determine the best algorithm based on location characteristics"""
+    
+    # Urban areas - use hotspot detection for dense cities
+    urban_areas = ["muscat", "salalah", "sohar", "nizwa", "sur", "rustaq", "bahla", "ibri"]
+    
+    # Calculate population density metrics
+    if len(population_df) > 0:
+        avg_density = population_df['density'].mean()
+        max_density = population_df['density'].max()
+        density_variance = population_df['density'].var()
+        
+        # Check if it's a known urban area
+        is_urban = any(city in place_name.lower() for city in urban_areas)
+        
+        # Decision logic
+        if is_urban and max_density > 300:
+            # High density urban area - use Hotspot Detection
+            return ("Hotspot Detection", 
+                    "High-density urban area detected - using Hotspot Detection for optimal coverage of dense population centers, "
+                    "Using high-band (mmWave) 5G (24–40 GHz) with coverage of 50–300 m, offering very high speeds")
+        elif avg_density > 150 and density_variance > 10000:
+            # High variance in density - use Genetic Algorithm for complex optimization
+            return ("Genetic Algorithm", 
+                    "Complex population distribution detected - using Genetic Algorithm for global optimization, "
+                    "Using high-band (mmWave) 5G (24–40 GHz) with coverage of 50–300 m, offering very high speeds")
+        elif len(population_df) > 1000 and avg_density < 100:
+            # Large sparse area - use K-Means for clustering
+            return ("Population-Weighted K-Means", 
+                    "Large area with distributed population - using K-Means clustering for balanced coverage, "
+                    "Using high-band (mmWave) 5G (24–40 GHz) with coverage of 50–300 m, offering very high speeds")
+        elif avg_density > 200:
+            # Moderate to high density - use Simulated Annealing
+            return ("Simulated Annealing", 
+                    "Moderate to high density area - using Simulated Annealing for optimized placement, "
+                    "Using high-band (mmWave) 5G (24–40 GHz) with coverage of 50–300 m, offering very high speeds")
+        else:
+            # Default case - Enhanced Greedy
+            return ("Enhanced Greedy", 
+                    "Standard population distribution - using Enhanced Greedy algorithm for efficient placement, "
+                    "Using high-band (mmWave) 5G (24–40 GHz) with coverage of 50–300 m, offering very high speeds")
+    else:
+        return ("Enhanced Greedy", 
+                "No population data available - using Enhanced Greedy as default, "
+                "Using high-band (mmWave) 5G (24–40 GHz) with coverage of 50–300 m, offering very high speeds")
 
 # =============================
 # Helpers
 # =============================
+
+
+def fix_tower_overlap(towers, area_type, max_iterations=100):
+    """
+    Adjusts tower positions to avoid overlap based on given area_type radius.
+    
+    Parameters:
+        towers (list of tuples): (lat, lon)
+        area_type (str): "urban" or "rural"
+        max_iterations (int): Maximum adjustment iterations.
+    
+    Returns:
+        list of tuples: Adjusted tower positions (lat, lon)
+    """
+    # Define radius based on type
+    radius_map = {
+        "urban": 700,
+        "rural": 5000
+    }
+    r = radius_map.get(area_type.lower(), 1000)
+
+    def move_tower(lat, lon, bearing, distance_m):
+        """Returns new lat/lon moved from original by distance and bearing."""
+        R = 6371000  # Earth radius in meters
+        lat_rad = math.radians(lat)
+        lon_rad = math.radians(lon)
+        bearing_rad = math.radians(bearing)
+
+        new_lat = math.asin(math.sin(lat_rad) * math.cos(distance_m / R) +
+                            math.cos(lat_rad) * math.sin(distance_m / R) * math.cos(bearing_rad))
+        new_lon = lon_rad + math.atan2(math.sin(bearing_rad) * math.sin(distance_m / R) * math.cos(lat_rad),
+                                       math.cos(distance_m / R) - math.sin(lat_rad) * math.sin(new_lat))
+
+        return math.degrees(new_lat), math.degrees(new_lon)
+
+    towers = list(towers)  # Copy list
+
+    for _ in range(max_iterations):
+        overlap_found = False
+
+        for i in range(len(towers)):
+            lat1, lon1 = towers[i]
+
+            for j in range(i + 1, len(towers)):
+                lat2, lon2 = towers[j]
+
+                dist = haversine_meters(lat1, lon1, lat2, lon2)
+                min_dist = 2 * r  # since same radius for all
+
+                if dist < min_dist:  # Overlap detected
+                    overlap_found = True
+
+                    # Bearing from tower1 to tower2
+                    bearing = math.degrees(math.atan2(
+                        math.sin(math.radians(lon2 - lon1)) * math.cos(math.radians(lat2)),
+                        math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) -
+                        math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+                        math.cos(math.radians(lon2 - lon1))
+                    ))
+
+                    shift_amount = (min_dist - dist) / 2 + 1  # Add 1m buffer
+
+                    # Move both towers in opposite directions
+                    towers[i] = move_tower(lat1, lon1, bearing + 180, shift_amount)
+                    towers[j] = move_tower(lat2, lon2, bearing, shift_amount)
+
+        if not overlap_found:
+            break
+
+    return towers
+
 def generate_mock_population_oman(num_points=2000):
     random.seed(42)
     data = []
@@ -194,91 +309,65 @@ def kmeans_tower_placement(pop_df, num_towers, radius_m):
 
 
 # =============================
-# ALGORITHM 3: Population Density Hotspot Detection (Fixed to place exact number of towers)
+# ALGORITHM 3: Population Density Hotspot Detection
 # =============================
-def hotspot_tower_placement(pop_df, num_towers, radius_m):
-    if len(pop_df) == 0 or num_towers == 0:
+from math import radians, sin, cos, sqrt, atan2
+
+def haversine_meters(lat1, lon1, lat2, lon2):
+    """Calculate the great-circle distance between two points in meters."""
+    R = 6371000  # Earth's radius in meters
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return R * c
+
+
+def hotspot_tower_placement_redirect(pop_df, num_towers, radius_m):
+    if len(pop_df) == 0:
         return []
-    
+
     towers = []
     remaining_pop = pop_df.copy()
-    original_pop = pop_df.copy()
-    
-    for tower_num in range(num_towers):
+
+    for _ in range(num_towers):
         if remaining_pop.empty:
-            # If no uncovered population left, find best locations from original data
-            # that are not too close to existing towers
-            best_location = None
-            best_score = -1
-            min_distance_to_existing = radius_m * 0.8  # Minimum 80% of radius between towers
-            
-            for _, candidate in original_pop.iterrows():
-                candidate_point = (candidate.lat, candidate.lon)
-                
-                # Check distance to existing towers
-                too_close = False
-                for existing_tower in towers:
-                    distance = haversine(candidate_point[0], candidate_point[1], 
-                                       existing_tower[0], existing_tower[1])
-                    if distance < min_distance_to_existing:
-                        too_close = True
-                        break
-                
-                if not too_close:
-                    # Calculate potential coverage for this location
-                    potential_coverage = 0
-                    for _, pop_point in original_pop.iterrows():
-                        dist = haversine(candidate.lat, candidate.lon, pop_point.lat, pop_point.lon)
-                        if dist <= radius_m:
-                            potential_coverage += pop_point.density
-                    
-                    if potential_coverage > best_score:
-                        best_score = potential_coverage
-                        best_location = candidate_point
-            
-            # If we found a good location, use it
-            if best_location:
-                towers.append(best_location)
+            break
+
+        # Sort by density
+        remaining_pop = remaining_pop.sort_values(by='density', ascending=False).reset_index(drop=True)
+
+        for idx, hotspot in remaining_pop.iterrows():
+            candidate_point = (float(hotspot.lat), float(hotspot.lon))
+
+            # Check overlap
+            overlaps = [haversine_meters(candidate_point[0], candidate_point[1], tower[0], tower[1]) <= radius_m
+                        for tower in towers]
+
+            if not any(overlaps):
+                towers.append(candidate_point)
+                break
             else:
-                # As last resort, place tower at a random location from original data
-                # that maintains minimum distance from existing towers
-                attempts = 0
-                while attempts < 100:  # Limit attempts to avoid infinite loop
-                    candidate = original_pop.sample(n=1).iloc[0]
-                    candidate_point = (candidate.lat, candidate.lon)
-                    
-                    # Check minimum distance to existing towers
-                    valid_location = True
-                    for existing_tower in towers:
-                        distance = haversine(candidate_point[0], candidate_point[1], 
-                                           existing_tower[0], existing_tower[1])
-                        if distance < min_distance_to_existing:
-                            valid_location = False
-                            break
-                    
-                    if valid_location:
-                        towers.append(candidate_point)
+                # Try alternative points
+                for alt_idx, alt_hotspot in remaining_pop.iterrows():
+                    alt_point = (float(alt_hotspot.lat), float(alt_hotspot.lon))
+                    too_close = any(haversine_meters(alt_point[0], alt_point[1], tower[0], tower[1]) <= radius_m
+                                    for tower in towers)
+                    if not too_close:
+                        towers.append(alt_point)
+                        candidate_point = alt_point
                         break
-                    attempts += 1
-                
-                # If still no valid location found, place with reduced minimum distance
-                if len(towers) < tower_num + 1:
-                    candidate = original_pop.sample(n=1).iloc[0]
-                    towers.append((candidate.lat, candidate.lon))
-        else:
-            # Standard hotspot detection: find highest density uncovered area
-            max_density_idx = remaining_pop.density.idxmax()
-            hotspot = remaining_pop.loc[max_density_idx]
-            
-            tower_point = (float(hotspot.lat), float(hotspot.lon))
-            towers.append(tower_point)
-            
-            # Remove points within coverage radius from remaining population
-            distances = remaining_pop.apply(
-                lambda row: haversine(hotspot.lat, hotspot.lon, row.lat, row.lon), axis=1
-            )
-            remaining_pop = remaining_pop[distances > radius_m].reset_index(drop=True)
-    
+                break
+
+        # Remove covered points
+        distances = remaining_pop.apply(
+            lambda row: haversine_meters(candidate_point[0], candidate_point[1], float(row.lat), float(row.lon)),
+            axis=1
+        )
+        remaining_pop = remaining_pop[distances > radius_m].reset_index(drop=True)
+
     return towers
 
 
@@ -450,10 +539,6 @@ def load_population_csv_or_mock():
     gdf_within = gpd.sjoin(gdf, oman_boundary, predicate="within")
     return gdf_within.drop(columns=["geometry", "index_right"]).reset_index(drop=True)
 
-
-# =============================
-# UI -- Title
-# =============================
 # =============================
 # UI -- Title
 # =============================
@@ -471,10 +556,28 @@ with st.sidebar:
         ["Search by place name", "Manual coordinates", "Bounding box"]
     )
     
+    # New file uploader for population CSV
+    uploaded_file = st.file_uploader("Upload Population CSV File", type=["csv"])
+    
+    # Handle the uploaded file
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            if "lat" in df.columns and "lon" in df.columns:
+                pop_col = "population" if "population" in df.columns else ("density" if "density" in df.columns else None)
+                if pop_col is None:
+                    st.error("Uploaded CSV does not contain 'density' or 'population' columns. Please check the file.")
+                else:
+                    st.success("Population CSV uploaded successfully!")
+            else:
+                st.warning("CSV missing 'lat'/'lon' columns. Please check the file.")
+        except Exception as e:
+            st.error(f"Error reading the uploaded file: {e}")
+    
     target_lat, target_lon, location_found, location_error = None, None, False, None
     
     if location_method == "Search by place name":
-        place_name = st.text_input("Enter place name in Oman:", value="Salalah")
+        place_name = st.text_input("Enter place name in Oman:", value="Muscat")
         
         if st.button("🔍 Find Location"):
             if place_name.strip():
@@ -504,21 +607,11 @@ with st.sidebar:
         st.info(f"📌 Current target: **{loc_name}** ({loc_lat:.4f}, {loc_lon:.4f})")
     
     st.header("Radio & Constraints")
-    num_towers = st.slider("# Towers (K)", 1, 30, 5)
-    freq_mhz = st.select_slider("Frequency (MHz)", options=[700, 1800, 2100, 2600, 3500], value=3500)
-    tx_power_dbm = st.slider("Tx Power (dBm EIRP)", 30, 60, 46)
-    min_rsrp_dbm = st.slider("Coverage Threshold (dBm)", -120, -70, -100)
-    overlap_penalty = st.slider("Overlap penalty λ", 0.0, 1.0, 0.5, 0.1)
+    num_towers = st.slider("# Number Of Towers", 1, 30, 5)
 
     profile = st.selectbox("Propagation Profile", ["Urban", "Rural"])
-    pathloss_exp = 3.2 if profile == "Urban" else 2.6
+    cell_size_m = 700 if profile == "Urban" else 5000
 
-    cell_size_m = st.slider("Cell size (meters)", 50, 500, 100, 10)
-
-    st.header("Population Grid Overlay")
-    show_pop = st.checkbox("Show Population Grid Layer", True)
-    pop_alpha = st.slider("Population layer opacity (0–255)", 0, 255, 150)
-    pop_step = st.slider("Population sampling step (cells)", 1, 10, 1)
 
     st.markdown("**Analysis Region (around target location)**")
     if location_method == "Bounding box":
@@ -547,6 +640,7 @@ with st.sidebar:
             lon_min, lon_max = MIN_LON, MAX_LON
     use_mock = st.checkbox("Use mock (Oman-wide) population", value=True)
     points_count = st.number_input("Number of mock points", value=2000, min_value=200, max_value=20000, step=100)
+
 
 # =============================
 # Load population (always, to show map)
@@ -577,15 +671,16 @@ current_params_key = (
 if "params_key" in st.session_state and st.session_state.get("params_key") != current_params_key:
     st.info("Parameters changed. Click 'Run Optimization' to update tower placement and metrics.")
 
-# Algorithm description
+# Algorithm descriptions
 if "target_location" in st.session_state:
     loc_name = st.session_state["target_location"][2]
     st.success(f"🎯 **Target Location**: {loc_name}")
-    st.info("🔥 **Using Enhanced Hotspot Detection Algorithm** - This algorithm guarantees placement of the exact number of towers you specify while prioritizing the highest population density areas for maximum coverage efficiency.")
+    st.info("🤖 The system will automatically select the best placement algorithm based on the location's population characteristics.")
+else:
+    st.warning("📍 Please select a target location first using the sidebar options.")
 
-st.markdown("**Algorithm Guarantee**: The system will place exactly the number of towers you specify, even if it means placing additional towers in lower-density areas to meet your requirements.")
-st.markdown("When ready, click the button below to compute tower placement using **Enhanced Hotspot Detection**.")
-run_clicked = st.button("🚀 Run Enhanced Hotspot Detection")
+st.markdown("When ready, click the button below to compute tower placement. The system will analyze the population distribution and choose the optimal algorithm automatically.")
+run_clicked = st.button("🚀 Run Smart Optimization")
 
 # =============================
 # Run optimization on demand
@@ -599,9 +694,33 @@ if run_clicked and "target_location" in st.session_state:
     st.info(f"🧠 **Selected Algorithm**: {algorithm}")
     st.write(f"**Reason**: {algorithm_reason}")
     
-    with st.spinner(f"Running Hotspot Detection algorithm for {loc_name}..."):
-        # Always use Hotspot Detection algorithm
-        towers = hotspot_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m))
+    with st.spinner(f"Running {algorithm} algorithm for {loc_name}..."):
+        # Algorithm-specific parameters (set automatically)
+        ga_generations = 50
+        ga_population = 20
+        sa_iterations = 1000
+        
+        # Select and run the chosen algorithm
+        if algorithm == "Enhanced Greedy":
+            towers = greedy_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m))
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
+        elif algorithm == "Population-Weighted K-Means":
+            towers = kmeans_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m))
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
+        elif algorithm == "Hotspot Detection":
+            towers =  hotspot_tower_placement_redirect(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m))
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
+        elif algorithm == "Genetic Algorithm":
+            towers = genetic_algorithm_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m), generations=ga_generations, population_size=ga_population)
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
+        elif algorithm == "Simulated Annealing":
+            towers = simulated_annealing_tower_placement(base_population_df, num_towers=int(num_towers), radius_m=float(cell_size_m), max_iterations=sa_iterations)
+            overlap_fix = fix_tower_overlap(towers=towers,area_type=profile)
+            towers = overlap_fix
         
         covered_population = population_covered(towers, base_population_df, radius_m=float(cell_size_m))
 
@@ -614,13 +733,7 @@ if run_clicked and "target_location" in st.session_state:
         st.session_state["algorithm_reason"] = algorithm_reason
         st.session_state["params_key"] = current_params_key
         
-        st.success(f"✅ Enhanced Hotspot Detection complete! Successfully placed all {len(towers)} towers in {loc_name} (exactly {num_towers} as requested).")
-        
-        # Verification message
-        if len(towers) == num_towers:
-            st.info(f"🎯 **Tower Count Verification**: ✅ Placed {len(towers)} out of {num_towers} requested towers (100% success)")
-        else:
-            st.warning(f"⚠️ **Tower Count**: Placed {len(towers)} out of {num_towers} requested towers")
+        st.success(f"✅ Optimization complete! Placed {len(towers)} towers in {loc_name} using {algorithm}.")
 
 elif run_clicked and "target_location" not in st.session_state:
     st.error("❌ Please select a target location first!")
@@ -703,7 +816,7 @@ if show_stored:
     
     st.markdown(f"**🎯 Target Location:** {st.session_state.get('target_location', ['', '', 'Unknown'])[2]}")
     st.markdown(f"**🧠 Algorithm Used:** {algorithm_used}")
-    st.markdown(f"**🔥 Why Hotspot Detection:** Identifies and prioritizes the highest population density areas first, ensuring maximum coverage of populated regions")
+    st.markdown(f"**💡 Selection Reason:** {st.session_state.get('algorithm_reason', 'N/A')}")
     st.markdown(f"**📡 Number of Towers Placed:** {len(st.session_state['towers'])}")
     st.markdown(f"**📶 Coverage Radius:** {coverage_radius_val} meters")
 
