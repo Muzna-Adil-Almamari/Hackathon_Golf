@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: 5g-tower-planner
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app  # Mount local code into the container for development
+    restart: always

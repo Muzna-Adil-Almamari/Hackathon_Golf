@@ -1,0 +1,14 @@
+streamlit
+pandas
+shapely
+geopandas
+streamlit-folium
+fpdf
+numpy
+scikit-learn
+scipy
+networkx
+requests
+haversine
+folium
+python-dateutil

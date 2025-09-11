@@ -1,0 +1,28 @@
+# Ignore local virtual environments
+.venv
+venv
+env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Git and IDE files
+.git
+.gitignore
+*.log
+*.swp
+*.swo
+*.DS_Store
+.vscode
+.idea
+
+# Large data files (optional)
+*.gpkg
+*.csv
+*.zip
+*.tar
+*.gz
+
+# Streamlit cache
+.streamlit/
