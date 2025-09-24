@@ -1,0 +1,7 @@
+services:
+  app: 
+    build: .
+    container_name: 5g-tower-planner
+    ports:
+      - "8501:8501"
+    restart: always
