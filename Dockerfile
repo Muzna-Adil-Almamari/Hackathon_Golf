@@ -15,10 +15,11 @@ RUN apt-get update && apt-get install -y \
 
 # Copy project files
 COPY . /app
+# Upgrade pip
+RUN pip install --upgrade pip
 
 # Install Python dependencies
-RUN pip install --upgrade pip \
-    pip install --no-cache-dir \
+RUN pip install --no-cache-dir \
     streamlit \
     folium \
     pandas \
